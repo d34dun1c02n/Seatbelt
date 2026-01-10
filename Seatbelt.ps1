@@ -23,15 +23,23 @@
     PSCredential object for remote authentication
 
 .PARAMETER OutputFile
-    Path to output file
+    Path to output file (supports .txt, .csv, .html extensions)
+
+.PARAMETER OutputFormat
+    Output format: txt, csv, or html. Defaults to auto-detect from file extension.
 
 .PARAMETER Quiet
     Suppress banner output
+
+.PARAMETER Help
+    Show help information
 
 .EXAMPLE
     .\Seatbelt.ps1 -Command OSInfo
     .\Seatbelt.ps1 -Group System
     .\Seatbelt.ps1 -Group All -Full
+    .\Seatbelt.ps1 -Group System -OutputFile results.csv
+    .\Seatbelt.ps1 -Group All -OutputFile report.html
 
 .NOTES
     Version: 1.0.0
@@ -61,6 +69,10 @@ param(
     [string]$OutputFile,
 
     [Parameter()]
+    [ValidateSet('txt', 'csv', 'html')]
+    [string]$OutputFormat = 'txt',
+
+    [Parameter()]
     [switch]$Quiet,
 
     [Parameter()]
@@ -74,8 +86,9 @@ param(
 $Script:Version = "1.0.0"
 $Script:FilterResults = -not $Full
 $Script:IsRemote = -not [string]::IsNullOrEmpty($ComputerName)
-$Script:Results = @()
+$Script:Results = [System.Collections.ArrayList]::new()
 $Script:StartTime = Get-Date
+$Script:CurrentCommand = ""
 #endregion
 
 #region Banner
@@ -268,6 +281,7 @@ function Get-WmiData {
 function Write-CommandHeader {
     param([string]$CommandName, [string]$Description)
 
+    $Script:CurrentCommand = $CommandName
     Write-Host ""
     Write-Host "====== $CommandName ======" -ForegroundColor Green
     if ($Description) {
@@ -286,6 +300,15 @@ function Write-CommandOutput {
     $padding = " " * $Indent
     if ($null -eq $Value) { $Value = "" }
     Write-Host ("{0}{1,-40}: {2}" -f $padding, $Name, $Value)
+
+    # Collect result for file output
+    if ($OutputFile) {
+        $null = $Script:Results.Add([PSCustomObject]@{
+            Command = $Script:CurrentCommand
+            Name    = $Name
+            Value   = "$Value"
+        })
+    }
 }
 
 function Format-FileSize {
@@ -326,6 +349,132 @@ function Get-FileVersionInfo {
         return [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
     }
     catch { return $null }
+}
+
+function Export-ResultsToTxt {
+    param([string]$Path)
+
+    $output = [System.Text.StringBuilder]::new()
+    $null = $output.AppendLine("Seatbelt Results - $(Get-Date)")
+    $null = $output.AppendLine("=" * 60)
+    $null = $output.AppendLine("")
+
+    $currentCmd = ""
+    foreach ($result in $Script:Results) {
+        if ($result.Command -ne $currentCmd) {
+            $null = $output.AppendLine("")
+            $null = $output.AppendLine("====== $($result.Command) ======")
+            $currentCmd = $result.Command
+        }
+        $null = $output.AppendLine("  {0,-40}: {1}" -f $result.Name, $result.Value)
+    }
+
+    $null = $output.AppendLine("")
+    $null = $output.AppendLine("=" * 60)
+    $null = $output.AppendLine("Completed: $(Get-Date)")
+
+    $output.ToString() | Out-File -FilePath $Path -Encoding UTF8
+    Write-Host "[*] Results saved to: $Path" -ForegroundColor Green
+}
+
+function Export-ResultsToCsv {
+    param([string]$Path)
+
+    $Script:Results | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
+    Write-Host "[*] Results saved to: $Path" -ForegroundColor Green
+}
+
+function Export-ResultsToHtml {
+    param([string]$Path)
+
+    $html = [System.Text.StringBuilder]::new()
+    $null = $html.AppendLine(@"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Seatbelt Results - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</title>
+    <style>
+        body { font-family: 'Segoe UI', Consolas, monospace; margin: 20px; background: #1e1e1e; color: #d4d4d4; }
+        h1 { color: #569cd6; border-bottom: 2px solid #569cd6; padding-bottom: 10px; }
+        h2 { color: #4ec9b0; margin-top: 30px; border-bottom: 1px solid #4ec9b0; padding-bottom: 5px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th { background: #264f78; color: #fff; text-align: left; padding: 10px; }
+        td { padding: 8px 10px; border-bottom: 1px solid #3c3c3c; }
+        tr:hover { background: #2d2d2d; }
+        .name { color: #9cdcfe; width: 300px; }
+        .value { color: #ce9178; word-break: break-all; }
+        .timestamp { color: #6a9955; font-size: 0.9em; }
+        .summary { background: #264f78; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Seatbelt Security Enumeration Results</h1>
+    <div class="summary">
+        <p><strong>Generated:</strong> <span class="timestamp">$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</span></p>
+        <p><strong>Computer:</strong> $env:COMPUTERNAME</p>
+        <p><strong>Total Results:</strong> $($Script:Results.Count)</p>
+    </div>
+"@)
+
+    $currentCmd = ""
+    $tableOpen = $false
+
+    foreach ($result in $Script:Results) {
+        if ($result.Command -ne $currentCmd) {
+            if ($tableOpen) {
+                $null = $html.AppendLine("</table>")
+            }
+            $null = $html.AppendLine("<h2>$($result.Command)</h2>")
+            $null = $html.AppendLine("<table>")
+            $null = $html.AppendLine("<tr><th>Property</th><th>Value</th></tr>")
+            $currentCmd = $result.Command
+            $tableOpen = $true
+        }
+        $escapedName = [System.Web.HttpUtility]::HtmlEncode($result.Name)
+        $escapedValue = [System.Web.HttpUtility]::HtmlEncode($result.Value)
+        $null = $html.AppendLine("<tr><td class='name'>$escapedName</td><td class='value'>$escapedValue</td></tr>")
+    }
+
+    if ($tableOpen) {
+        $null = $html.AppendLine("</table>")
+    }
+
+    $null = $html.AppendLine(@"
+    <div class="summary">
+        <p class="timestamp">Report generated by Seatbelt (PowerShell Edition) v$($Script:Version)</p>
+    </div>
+</body>
+</html>
+"@)
+
+    $html.ToString() | Out-File -FilePath $Path -Encoding UTF8
+    Write-Host "[*] Results saved to: $Path" -ForegroundColor Green
+}
+
+function Export-Results {
+    param([string]$Path, [string]$Format)
+
+    if ($Script:Results.Count -eq 0) {
+        Write-Host "[!] No results to export" -ForegroundColor Yellow
+        return
+    }
+
+    # Auto-detect format from extension if not specified
+    if (-not $Format -and $Path) {
+        $ext = [System.IO.Path]::GetExtension($Path).ToLower()
+        switch ($ext) {
+            '.csv'  { $Format = 'csv' }
+            '.html' { $Format = 'html' }
+            '.htm'  { $Format = 'html' }
+            default { $Format = 'txt' }
+        }
+    }
+
+    switch ($Format.ToLower()) {
+        'csv'  { Export-ResultsToCsv -Path $Path }
+        'html' { Export-ResultsToHtml -Path $Path }
+        default { Export-ResultsToTxt -Path $Path }
+    }
 }
 
 #endregion
@@ -2897,15 +3046,17 @@ function Show-Help {
     Write-Host "=========================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Usage:" -ForegroundColor Yellow
-    Write-Host "  .\Seatbelt.ps1 [-Command <cmd1,cmd2,...>] [-Group <groupname>] [-Full] [-OutputFile <path>] [-Quiet]"
+    Write-Host "  .\Seatbelt.ps1 [-Command <cmd>] [-Group <group>] [-Full] [-OutputFile <path>] [-OutputFormat <fmt>]"
     Write-Host ""
     Write-Host "Parameters:" -ForegroundColor Yellow
     Write-Host "  -Command       Specific command(s) to run (comma-separated)"
     Write-Host "  -Group         Command group: System, User, Browser, Remote, Misc, Slack, Chromium, All"
     Write-Host "  -Full          Return unfiltered results (default: filtered)"
-    Write-Host "  -OutputFile    Path to save output"
+    Write-Host "  -OutputFile    Path to save output (e.g., results.txt, results.csv, results.html)"
+    Write-Host "  -OutputFormat  Output format: txt, csv, html (default: auto-detect from extension)"
     Write-Host "  -Quiet         Suppress banner"
     Write-Host "  -ComputerName  Remote computer (for supported commands)"
+    Write-Host "  -Help          Show this help message"
     Write-Host ""
     Write-Host "Available Groups:" -ForegroundColor Yellow
     Write-Host "  System   - OS, security, network, services, processes (~62 commands)"
@@ -2922,7 +3073,10 @@ function Show-Help {
     Write-Host "  .\Seatbelt.ps1 -Command OSInfo,Processes,Services"
     Write-Host "  .\Seatbelt.ps1 -Group System"
     Write-Host "  .\Seatbelt.ps1 -Group All -Full"
-    Write-Host "  .\Seatbelt.ps1 -Group System -OutputFile C:\results.txt"
+    Write-Host "  .\Seatbelt.ps1 -Group System -OutputFile results.txt"
+    Write-Host "  .\Seatbelt.ps1 -Group System -OutputFile results.csv"
+    Write-Host "  .\Seatbelt.ps1 -Group All -OutputFile report.html"
+    Write-Host "  .\Seatbelt.ps1 -Group User -OutputFile data.txt -OutputFormat csv"
     Write-Host ""
     Write-Host "Available Commands ($($Script:AllCommands.Count) total):" -ForegroundColor Yellow
 
@@ -2977,58 +3131,49 @@ function Invoke-Seatbelt {
 
     $commandsToRun = $commandsToRun | Select-Object -Unique
 
-    # Setup output redirection if needed
-    $transcriptStarted = $false
+    # Clear results collection
+    $Script:Results.Clear()
+
+    Write-Host ""
+    Write-Host "[*] Running $($commandsToRun.Count) command(s)" -ForegroundColor Cyan
+    Write-Host "[*] Started at: $(Get-Date)" -ForegroundColor DarkGray
+    if ($Script:FilterResults) {
+        Write-Host "[*] Results filtered (use -Full for complete output)" -ForegroundColor DarkGray
+    }
     if ($OutputFile) {
-        try {
-            Start-Transcript -Path $OutputFile -Force | Out-Null
-            $transcriptStarted = $true
+        Write-Host "[*] Output will be saved to: $OutputFile ($OutputFormat format)" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+
+    $completed = 0
+    foreach ($cmd in $commandsToRun) {
+        if ($Script:AllCommands.ContainsKey($cmd)) {
+            try {
+                if ($DelayCommands -gt 0) {
+                    Start-Sleep -Milliseconds $DelayCommands
+                }
+                & $Script:AllCommands[$cmd]
+                $completed++
+            }
+            catch {
+                Write-Host "Error executing $cmd : $_" -ForegroundColor Red
+            }
         }
-        catch {
-            Write-Host "Warning: Could not start transcript. Using alternative output method." -ForegroundColor Yellow
+        else {
+            Write-Host "Unknown command: $cmd" -ForegroundColor Yellow
         }
     }
 
-    try {
-        Write-Host ""
-        Write-Host "[*] Running $($commandsToRun.Count) command(s)" -ForegroundColor Cyan
-        Write-Host "[*] Started at: $(Get-Date)" -ForegroundColor DarkGray
-        if ($Script:FilterResults) {
-            Write-Host "[*] Results filtered (use -Full for complete output)" -ForegroundColor DarkGray
-        }
-        Write-Host ""
+    Write-Host ""
+    Write-Host "[*] Completed $completed/$($commandsToRun.Count) commands" -ForegroundColor Cyan
+    Write-Host "[*] Finished at: $(Get-Date)" -ForegroundColor DarkGray
 
-        $completed = 0
-        foreach ($cmd in $commandsToRun) {
-            if ($Script:AllCommands.ContainsKey($cmd)) {
-                try {
-                    if ($DelayCommands -gt 0) {
-                        Start-Sleep -Milliseconds $DelayCommands
-                    }
-                    & $Script:AllCommands[$cmd]
-                    $completed++
-                }
-                catch {
-                    Write-Host "Error executing $cmd : $_" -ForegroundColor Red
-                }
-            }
-            else {
-                Write-Host "Unknown command: $cmd" -ForegroundColor Yellow
-            }
-        }
+    $duration = (Get-Date) - $Script:StartTime
+    Write-Host "[*] Duration: $($duration.TotalSeconds.ToString('F2')) seconds" -ForegroundColor DarkGray
 
-        Write-Host ""
-        Write-Host "[*] Completed $completed/$($commandsToRun.Count) commands" -ForegroundColor Cyan
-        Write-Host "[*] Finished at: $(Get-Date)" -ForegroundColor DarkGray
-
-        $duration = (Get-Date) - $Script:StartTime
-        Write-Host "[*] Duration: $($duration.TotalSeconds.ToString('F2')) seconds" -ForegroundColor DarkGray
-    }
-    finally {
-        if ($transcriptStarted) {
-            Stop-Transcript | Out-Null
-            Write-Host "[*] Output saved to: $OutputFile" -ForegroundColor Green
-        }
+    # Export results if output file specified
+    if ($OutputFile) {
+        Export-Results -Path $OutputFile -Format $OutputFormat
     }
 }
 
