@@ -299,7 +299,9 @@ function Write-CommandOutput {
 
     $padding = " " * $Indent
     if ($null -eq $Value) { $Value = "" }
-    Write-Host ("{0}{1,-40}: {2}" -f $padding, $Name, $Value)
+    # Use string concatenation to avoid format string issues with curly braces in values
+    $namePadded = $Name.PadRight(40)
+    Write-Host "$padding$namePadded : $Value"
 
     # Collect result for file output
     if ($OutputFile) {
@@ -366,7 +368,9 @@ function Export-ResultsToTxt {
             $null = $output.AppendLine("====== $($result.Command) ======")
             $currentCmd = $result.Command
         }
-        $null = $output.AppendLine("  {0,-40}: {1}" -f $result.Name, $result.Value)
+        # Use string concatenation to avoid format string issues with curly braces
+        $namePadded = ($result.Name).PadRight(40)
+        $null = $output.AppendLine("  $namePadded : $($result.Value)")
     }
 
     $null = $output.AppendLine("")
