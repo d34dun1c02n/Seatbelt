@@ -64,7 +64,10 @@ param(
     [switch]$Quiet,
 
     [Parameter()]
-    [int]$DelayCommands = 0
+    [int]$DelayCommands = 0,
+
+    [Parameter()]
+    [switch]$Help
 )
 
 #region Script Configuration
@@ -2945,8 +2948,8 @@ function Invoke-Seatbelt {
     # Show banner
     Show-Banner
 
-    # If no commands specified, show help
-    if (-not $Command -and -not $Group) {
+    # Show help if requested or no commands specified
+    if ($Help -or (-not $Command -and -not $Group)) {
         Show-Help
         return
     }
