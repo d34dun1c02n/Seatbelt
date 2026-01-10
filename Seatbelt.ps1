@@ -2223,7 +2223,7 @@ function Get-SBOfficeMRUs {
             $values = Get-RegistryValues -Hive "HKCU" -Path $mruPath
 
             if ($values.Count -gt 1) {
-                Write-Host "  Office $version $app:" -ForegroundColor Cyan
+                Write-Host "  Office $version ${app}:" -ForegroundColor Cyan
                 foreach ($key in $values.Keys | Where-Object { $_ -match "^Item" } | Select-Object -First 5) {
                     Write-Host "    $($values[$key])"
                 }
